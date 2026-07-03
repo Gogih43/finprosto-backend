@@ -54,10 +54,10 @@ def get_cbr_rate():
         
         if row:
             return {"status": "success", "cbr_rate": row["rate"]}
-        # Если ЦБ заблокировал немецкий сервер Render, отдаем резерв
-        return {"status": "success", "cbr_rate": 16.0}
+        # Если ЦБ заблокировал немецкий сервер Render, отдаем правильный резерв!
+        return {"status": "success", "cbr_rate": 14.25}
     except Exception:
-        return {"status": "success", "cbr_rate": 16.0}
+        return {"status": "success", "cbr_rate": 14.25}
 
 # 3. Отдаем лучшую ставку для главного экрана (Умный поиск минимума)
 @app.get("/api/get_best_offer")
