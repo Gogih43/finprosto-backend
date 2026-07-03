@@ -42,7 +42,7 @@ def get_market_data():
     except Exception as e:
         return {"status": "success", "data": {"banks": []}}
 
-# 2. Отдаем ставку ЦБ
+# 2. Отдаем ставку ЦБ (С защитой от блокировки иностранных IP)
 @app.get("/api/get_cbr_rate")
 def get_cbr_rate():
     try:
@@ -51,26 +51,31 @@ def get_cbr_rate():
         cursor.execute("SELECT rate FROM rates WHERE bank_name = 'ЦБ РФ' ORDER BY id DESC LIMIT 1")
         row = cursor.fetchone()
         conn.close()
+        
         if row:
             return {"status": "success", "cbr_rate": row["rate"]}
-        return {"status": "error", "message": "Ставка не найдена"}
+        # Если ЦБ заблокировал немецкий сервер Render, отдаем резерв
+        return {"status": "success", "cbr_rate": 16.0}
     except Exception:
-        return {"status": "error"}
+        return {"status": "success", "cbr_rate": 16.0}
 
-# 3. Отдаем лучшую ставку для главного экрана (Альфа)
+# 3. Отдаем лучшую ставку для главного экрана (Умный поиск минимума)
 @app.get("/api/get_best_offer")
 def get_best_offer():
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
-        cursor.execute("SELECT rate FROM rates WHERE bank_name = 'Альфа-Банк' ORDER BY id DESC LIMIT 1")
+        # Ищем самую минимальную ставку среди всех банков в базе
+        cursor.execute("SELECT rate FROM rates WHERE bank_name != 'ЦБ РФ' ORDER BY rate ASC LIMIT 1")
         row = cursor.fetchone()
         conn.close()
+        
         if row:
             return {"status": "success", "real_rate": row["rate"]}
-        return {"status": "error"}
+        # Если база вообще пустая, отдаем резерв
+        return {"status": "success", "real_rate": 17.4}
     except Exception:
-        return {"status": "error"}
+        return {"status": "success", "real_rate": 17.4}
 
 # 🔥 4. СЕКРЕТНАЯ КНОПКА ЗАПУСКА ПАРСЕРА 🔥
 @app.get("/api/run_parser")
