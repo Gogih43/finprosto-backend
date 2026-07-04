@@ -6,7 +6,6 @@ from typing import List
 
 app = FastAPI()
 
-# Разрешаем сайту на Vercel забирать данные
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -15,15 +14,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# СЕКРЕТНЫЙ ПАРОЛЬ (никто, кроме твоего ноутбука, не сможет поменять базу)
 SECRET_KEY = "GOGIH_SUPER_SECRET_2026"
 
-# Функция для подключения к базе (с автоматическим созданием таблицы!)
 def get_db_connection():
     conn = sqlite3.connect('finprosto.db')
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
-    # Если таблицы нет (чистый сервер) - создаем её
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS rates (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -36,7 +32,6 @@ def get_db_connection():
     conn.commit()
     return conn
 
-# Структуры данных
 class RateItem(BaseModel):
     name: str
     rate: float
@@ -46,7 +41,6 @@ class UpdatePayload(BaseModel):
     secret_key: str
     rates: List[RateItem]
 
-# 🔥 ПРИЕМ ДАННЫХ СО ШПИОНА (С ОЧИСТКОЙ СТАРЫХ СТАВОК) 🔥
 @app.post("/api/update_rates")
 def update_rates(payload: UpdatePayload):
     if payload.secret_key != SECRET_KEY:
@@ -55,11 +49,7 @@ def update_rates(payload: UpdatePayload):
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
-        
-        # Очищаем базу от старого мусора
         cursor.execute("DELETE FROM rates")
-        
-        # Записываем новые свежие ставки
         for item in payload.rates:
             cursor.execute(
                 "INSERT INTO rates (bank_name, rate, badge) VALUES (?, ?, ?)",
@@ -67,11 +57,9 @@ def update_rates(payload: UpdatePayload):
             )
         conn.commit()
         conn.close()
-        return {"status": "success", "message": "База данных успешно обновлена с ноутбука!"}
+        return {"status": "success", "message": "База обновлена!"}
     except Exception as e:
         return {"status": "error", "message": str(e)}
-
-# --- РАЗДАЧА ДАННЫХ ДЛЯ САЙТА ---
 
 @app.get("/api/get_market_data")
 def get_market_data():
@@ -87,7 +75,6 @@ def get_market_data():
         cursor.execute("SELECT bank_name as name, rate, badge FROM rates WHERE bank_name != 'ЦБ РФ' GROUP BY bank_name")
         banks = [dict(row) for row in cursor.fetchall()]
         conn.close()
-        
         if len(banks) == 0:
             banks = fallback_banks
         else:
@@ -109,15 +96,16 @@ def get_cbr_rate():
     except Exception:
         return {"status": "success", "cbr_rate": 14.25}
 
+# 🔥 ИСПРАВЛЕНО: ТЕПЕРЬ ОТДАЕМ И ИМЯ БАНКА ТОЖЕ 🔥
 @app.get("/api/get_best_offer")
 def get_best_offer():
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
-        cursor.execute("SELECT rate FROM rates WHERE bank_name != 'ЦБ РФ' ORDER BY rate ASC LIMIT 1")
+        cursor.execute("SELECT bank_name, rate FROM rates WHERE bank_name != 'ЦБ РФ' ORDER BY rate ASC LIMIT 1")
         row = cursor.fetchone()
         conn.close()
-        if row: return {"status": "success", "real_rate": row["rate"]}
-        return {"status": "success", "real_rate": 17.4}
+        if row: return {"status": "success", "bank_name": row["bank_name"], "real_rate": row["rate"]}
+        return {"status": "success", "bank_name": "Альфа-Банк", "real_rate": 17.4}
     except Exception:
-        return {"status": "success", "real_rate": 17.4}
+        return {"status": "success", "bank_name": "Альфа-Банк", "real_rate": 17.4}
