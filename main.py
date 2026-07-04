@@ -1,11 +1,11 @@
 import sqlite3
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from parser import run_heavy_artillery # Подключаем твой парсер
+from pydantic import BaseModel
+from typing import List
 
 app = FastAPI()
 
-# Разрешаем сайту на Vercel забирать данные без блокировок
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -14,44 +14,70 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Функция для подключения к базе
+# СЕКРЕТНЫЙ ПАРОЛЬ (никто, кроме твоего ноутбука, не сможет поменять базу)
+SECRET_KEY = "GOGIH_SUPER_SECRET_2026"
+
 def get_db_connection():
     conn = sqlite3.connect('finprosto.db')
     conn.row_factory = sqlite3.Row
     return conn
 
-# 1. Отдаем все банки для сравнения (С железобетонным резервом)
+# Структура данных, которую будет присылать твой ноутбук
+class RateItem(BaseModel):
+    name: str
+    rate: float
+    badge: str
+
+class UpdatePayload(BaseModel):
+    secret_key: str
+    rates: List[RateItem]
+
+# 🔥 НОВАЯ ФУНКЦИЯ: ПРИЕМ ДАННЫХ С ТВОЕГО НОУТБУКА
+@app.post("/api/update_rates")
+def update_rates(payload: UpdatePayload):
+    if payload.secret_key != SECRET_KEY:
+        raise HTTPException(status_code=403, detail="Неверный пароль!")
+    
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        # Записываем новые свежие ставки в базу
+        for item in payload.rates:
+            cursor.execute(
+                "INSERT INTO rates (bank_name, rate, badge) VALUES (?, ?, ?)",
+                (item.name, item.rate, item.badge)
+            )
+        conn.commit()
+        conn.close()
+        return {"status": "success", "message": "База данных успешно обновлена с ноутбука!"}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+# --- ОСТАЛЬНЫЕ ФУНКЦИИ (РАЗДАЧА ДЛЯ САЙТА) ОСТАЮТСЯ КАК БЫЛИ ---
+
 @app.get("/api/get_market_data")
 def get_market_data():
     fallback_banks = [
         {"name": "Альфа-Банк", "rate": 17.4, "badge": "Лучшее решение"},
         {"name": "СберБанк", "rate": 17.9, "badge": "+ 21 000 ₽ переплаты"},
-        {"name": "ВТБ", "rate": 15.9, "badge": "Обязательная страховка"},
-        {"name": "Т-Банк", "rate": 14.9, "badge": "Скрытые комиссии"}
+        {"name": "ВТБ", "url": "https://www.vtb.ru/personal/kredity/nalichnymi/", "rate": 15.9, "badge": "Обязательная страховка"},
+        {"name": "Т-Банк", "url": "https://www.tbank.ru/loans/cash-loan/", "rate": 14.9, "badge": "Скрытые комиссии"}
     ]
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
-        cursor.execute('''
-            SELECT bank_name as name, rate, badge 
-            FROM rates 
-            WHERE bank_name != 'ЦБ РФ'
-            GROUP BY bank_name 
-        ''')
+        cursor.execute("SELECT bank_name as name, rate, badge FROM rates WHERE bank_name != 'ЦБ РФ' GROUP BY bank_name")
         banks = [dict(row) for row in cursor.fetchall()]
         conn.close()
         
-        # Если база оказалась пустой после перезагрузки сервера - отдаем резерв
         if len(banks) == 0:
             banks = fallback_banks
         else:
             banks.sort(key=lambda x: x["rate"])
-            
         return {"status": "success", "data": {"banks": banks}}
-    except Exception as e:
-        # Если базы вообще еще нет - отдаем резерв
+    except Exception:
         return {"status": "success", "data": {"banks": fallback_banks}}
-# 2. Отдаем ставку ЦБ (С защитой от блокировки иностранных IP)
+
 @app.get("/api/get_cbr_rate")
 def get_cbr_rate():
     try:
@@ -60,37 +86,20 @@ def get_cbr_rate():
         cursor.execute("SELECT rate FROM rates WHERE bank_name = 'ЦБ РФ' ORDER BY id DESC LIMIT 1")
         row = cursor.fetchone()
         conn.close()
-        
-        if row:
-            return {"status": "success", "cbr_rate": row["rate"]}
-        # Если ЦБ заблокировал немецкий сервер Render, отдаем правильный резерв!
+        if row: return {"status": "success", "cbr_rate": row["rate"]}
         return {"status": "success", "cbr_rate": 14.25}
     except Exception:
         return {"status": "success", "cbr_rate": 14.25}
 
-# 3. Отдаем лучшую ставку для главного экрана (Умный поиск минимума)
 @app.get("/api/get_best_offer")
 def get_best_offer():
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
-        # Ищем самую минимальную ставку среди всех банков в базе
         cursor.execute("SELECT rate FROM rates WHERE bank_name != 'ЦБ РФ' ORDER BY rate ASC LIMIT 1")
         row = cursor.fetchone()
         conn.close()
-        
-        if row:
-            return {"status": "success", "real_rate": row["rate"]}
-        # Если база вообще пустая, отдаем резерв
+        if row: return {"status": "success", "real_rate": row["rate"]}
         return {"status": "success", "real_rate": 17.4}
     except Exception:
         return {"status": "success", "real_rate": 17.4}
-
-# 🔥 4. СЕКРЕТНАЯ КНОПКА ЗАПУСКА ПАРСЕРА 🔥
-@app.get("/api/run_parser")
-async def trigger_parser():
-    try:
-        await run_heavy_artillery()
-        return {"status": "success", "message": "БИНГО! Парсер отработал! База данных успешно обновлена!"}
-    except Exception as e:
-        return {"status": "error", "message": f"Ошибка парсера: {str(e)}"}
