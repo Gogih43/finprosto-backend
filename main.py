@@ -41,7 +41,11 @@ def update_rates(payload: UpdatePayload):
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
-        # Записываем новые свежие ставки в базу
+        
+        # 🔥 ОЧИЩАЕМ БАЗУ ОТ СТАРЫХ СТАВОК ПЕРЕД ЗАПИСЬЮ НОВЫХ 🔥
+        cursor.execute("DELETE FROM rates")
+        
+        # Записываем новые свежие ставки
         for item in payload.rates:
             cursor.execute(
                 "INSERT INTO rates (bank_name, rate, badge) VALUES (?, ?, ?)",
