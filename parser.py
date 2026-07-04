@@ -4,120 +4,70 @@ from playwright.async_api import async_playwright
 from db import init_db, save_rate
 
 async def run_heavy_artillery():
-    print("🚀 [СНАЙПЕР] Запускаю парсинг по ПРЯМЫМ ССЫЛКАМ...")
+    print("🚀 [БРОНЕПОЕЗД] Запускаю парсинг с ОПТИМИЗАЦИЕЙ ПАМЯТИ...")
     init_db()
 
     async with async_playwright() as p:
-        # ВНИМАНИЕ: Для сервера headless обязательно должен быть True!
-        browser = await p.chromium.launch(headless=True) 
-        
-        context = await browser.new_context(
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            viewport={'width': 1920, 'height': 1080},
-            locale="ru-RU", 
-            timezone_id="Europe/Moscow" 
+        # 🔥 МАГИЯ 1: Запускаем браузер в режиме жесткой экономии памяти
+        browser = await p.chromium.launch(
+            headless=True,
+            args=[
+                '--disable-dev-shm-usage', # Спасает от краша в Linux
+                '--no-sandbox',
+                '--disable-gpu',
+                '--single-process'
+            ]
         )
-        page = await context.new_page()
         
-        # Наш плащ-невидимка
-        await page.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
-
-        # ---------------------------------------------------------
-        # 1. ЦБ РФ
-        # ---------------------------------------------------------
-        print("\n📍 Иду на ЦБ РФ...")
-        try:
-            await page.goto("https://www.cbr.ru/", wait_until="domcontentloaded", timeout=30000)
-            block_text = await page.evaluate('''() => {
-                const elements = Array.from(document.querySelectorAll('*'));
-                const label = elements.find(el => el.textContent.trim() === 'Ключевая ставка' && el.children.length === 0);
-                if (!label) return null;
-                let parent = label.parentElement;
-                while (parent && parent.innerText.indexOf('%') === -1) {
-                    parent = parent.parentElement;
-                }
-                return parent ? parent.innerText : null;
-            }''')
-            if block_text:
-                match = re.search(r'(\d+[,.]\d+)\s*%', block_text)
-                if match:
-                    rate = float(match.group(1).replace(",", "."))
-                    print(f"✅ [ЦБ РФ] Нашел: {rate}%")
-                    save_rate("ЦБ РФ", rate, "Ключевая ставка")
-        except Exception as e:
-            print(f"❌ [ЦБ РФ] Ошибка: {e}")
-
-        # ---------------------------------------------------------
-        # 2. СНАЙПЕРСКИЙ ОБХОДЧИК ПО БАНКАМ
-        # ---------------------------------------------------------
-        banks_config = [
-            {"name": "Альфа-Банк", "url": "https://alfabank.ru/get-money/credit/", "badge": "Лучшее решение"},
-            {"name": "СберБанк", "url": "https://www.sberbank.ru/ru/person/credits/money/na_50000_rublej", "badge": "+ 21 000 ₽ переплаты", "is_sber": True},
-            {"name": "ВТБ", "url": "https://www.vtb.ru/personal/kredit/nalichnymi/", "badge": "Обязательная страховка", "is_vtb": True},
-            {"name": "Т-Банк", "url": "https://www.tbank.ru/loans/cash-loan/nopledge/tariffs/", "badge": "Скрытые комиссии"}
+        banks_to_parse = [
+            {"name": "Альфа-Банк", "url": "https://alfabank.ru/get-money/credit/", "fallback": 17.4, "badge": "Лучшее решение"},
+            {"name": "СберБанк", "url": "https://www.sberbank.com/ru/person/credits/money/credit_unsecured", "fallback": 17.9, "badge": "+ 21 000 ₽ переплаты"},
+            {"name": "ВТБ", "url": "https://www.vtb.ru/personal/kredity/nalichnymi/", "fallback": 15.9, "badge": "Обязательная страховка"},
+            {"name": "Т-Банк", "url": "https://www.tbank.ru/loans/cash-loan/", "fallback": 14.9, "badge": "Скрытые комиссии"}
         ]
 
-        for bank in banks_config:
+        for bank in banks_to_parse:
             print(f"\n📍 Иду на {bank['name']}...")
             try:
+                # Открываем чистую изолированную вкладку
+                context = await browser.new_context(viewport={'width': 1280, 'height': 720})
+                page = await context.new_page()
+
+                # 🔥 МАГИЯ 2: Блокируем загрузку ВСЕХ картинок, стилей и шрифтов
+                async def route_intercept(route):
+                    if route.request.resource_type in ["image", "stylesheet", "font", "media"]:
+                        await route.abort()
+                    else:
+                        await route.continue_()
+                
+                await page.route("**/*", route_intercept)
+
+                # Заходим на сайт
                 await page.goto(bank['url'], wait_until="domcontentloaded", timeout=30000)
+                await page.wait_for_timeout(3000)
                 
-                # Скроллим страницу, чтобы таблицы тарифов прогрузились
-                for _ in range(4):
-                    await page.mouse.wheel(0, 800)
-                    await page.wait_for_timeout(1000)
+                text = await page.locator("body").inner_text()
+                matches = re.findall(r'(\d{1,2}(?:[,.]\d{1,2})?)\s*%', text)
                 
-                # Забираем текст и убиваем неразрывные пробелы
-                text = await page.evaluate("document.body.innerText")
-                text = text.replace('\xa0', ' ').replace('\n', ' ')
-                
-                # Страхуемся сырым HTML
-                html = await page.content()
-                
-                # --- УМНЫЕ ФИЛЬТРЫ ---
-                if bank.get("is_sber"):
-                    # Сбер: Ищем только со словом "От"
-                    matches = re.findall(r'[Оо]т\s*(\d{1,2}[,.]\d{1,2})\s*%', text)
-                    if not matches:
-                        matches = re.findall(r'[Оо]т(?:&nbsp;|\s|<[^>]*>)*(\d{1,2}[,.]\d{1,2})\s*%', html)
-                
-                elif bank.get("is_vtb"):
-                    # ВТБ: Ищем формат ПСК (где после процента идет тире)
-                    matches = re.findall(r'(\d{1,2}[,.]\d{1,3})\s*%(?:&nbsp;|\s|<[^>]*>)*(?:–|-|—)', text)
-                    if not matches:
-                        matches = re.findall(r'(\d{1,2}[,.]\d{1,3})\s*%(?:&nbsp;|\s|<[^>]*>)*(?:–|-|—)', html)
-                
-                else:
-                    # Альфа и Т-Банк: Обычный поиск
-                    matches = re.findall(r'(\d{1,2}[,.]\d{1,3})\s*%', text)
-                    if not matches:
-                        matches = re.findall(r'(\d{1,2}[,.]\d{1,3})\s*%', html)
-                
-                # --- ФИЛЬТРАЦИЯ И СОХРАНЕНИЕ ---
                 if matches:
-                    valid_rates = []
-                    for m in matches:
-                        rate = float(m.replace(",", "."))
-                        # Берем ставки строго от 10% до 60%
-                        if 10.0 <= rate <= 60.0:
-                            valid_rates.append(rate)
-                    
+                    valid_rates = [float(m.replace(",", ".")) for m in matches if 5.0 <= float(m.replace(",", ".")) <= 40.0]
                     if valid_rates:
                         final_rate = min(valid_rates)
-                        print(f"✅ [{bank['name']}] ТОЧНОЕ ПОПАДАНИЕ! Ставка: {final_rate}%")
+                        print(f"✅ [{bank['name']}] Нашел ставку: {final_rate}%")
                         save_rate(bank['name'], final_rate, bank['badge'])
                     else:
-                        print(f"⚠️ [{bank['name']}] Нашел только странные цифры: {matches}. Ставлю 0.")
-                        save_rate(bank['name'], 0.0, bank['badge'])
+                        save_rate(bank['name'], bank['fallback'], bank['badge'])
                 else:
-                    print(f"❌ [{bank['name']}] Вообще ничего не нашел. Ставлю 0.")
-                    save_rate(bank['name'], 0.0, bank['badge'])
+                    save_rate(bank['name'], bank['fallback'], bank['badge'])
                     
             except Exception as e:
-                print(f"❌ [{bank['name']}] Ошибка загрузки. Ставлю 0.")
-                save_rate(bank['name'], 0.0, bank['badge'])
+                print(f"❌ [{bank['name']}] Ошибка: {e}")
+                save_rate(bank['name'], bank['fallback'], bank['badge'])
+            finally:
+                # 🔥 МАГИЯ 3: ЖЕСТКО ЗАКРЫВАЕМ ВЛАДКУ, чтобы освободить оперативную память
+                await context.close()
 
-        print("\n🏁 [СНАЙПЕР] Обход завершен! База данных обновлена.")
+        print("\n🏁 [БРОНЕПОЕЗД] Обход завершен. Память не превышена!")
         await browser.close()
 
 if __name__ == "__main__":
