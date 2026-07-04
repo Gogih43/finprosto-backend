@@ -6,6 +6,7 @@ from typing import List
 
 app = FastAPI()
 
+# Разрешаем сайту на Vercel забирать данные
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -17,12 +18,25 @@ app.add_middleware(
 # СЕКРЕТНЫЙ ПАРОЛЬ (никто, кроме твоего ноутбука, не сможет поменять базу)
 SECRET_KEY = "GOGIH_SUPER_SECRET_2026"
 
+# Функция для подключения к базе (с автоматическим созданием таблицы!)
 def get_db_connection():
     conn = sqlite3.connect('finprosto.db')
     conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    # Если таблицы нет (чистый сервер) - создаем её
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS rates (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            bank_name TEXT NOT NULL,
+            rate REAL NOT NULL,
+            badge TEXT,
+            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+    conn.commit()
     return conn
 
-# Структура данных, которую будет присылать твой ноутбук
+# Структуры данных
 class RateItem(BaseModel):
     name: str
     rate: float
@@ -32,7 +46,7 @@ class UpdatePayload(BaseModel):
     secret_key: str
     rates: List[RateItem]
 
-# 🔥 НОВАЯ ФУНКЦИЯ: ПРИЕМ ДАННЫХ С ТВОЕГО НОУТБУКА
+# 🔥 ПРИЕМ ДАННЫХ СО ШПИОНА (С ОЧИСТКОЙ СТАРЫХ СТАВОК) 🔥
 @app.post("/api/update_rates")
 def update_rates(payload: UpdatePayload):
     if payload.secret_key != SECRET_KEY:
@@ -42,7 +56,7 @@ def update_rates(payload: UpdatePayload):
         conn = get_db_connection()
         cursor = conn.cursor()
         
-        # 🔥 ОЧИЩАЕМ БАЗУ ОТ СТАРЫХ СТАВОК ПЕРЕД ЗАПИСЬЮ НОВЫХ 🔥
+        # Очищаем базу от старого мусора
         cursor.execute("DELETE FROM rates")
         
         # Записываем новые свежие ставки
@@ -57,15 +71,15 @@ def update_rates(payload: UpdatePayload):
     except Exception as e:
         return {"status": "error", "message": str(e)}
 
-# --- ОСТАЛЬНЫЕ ФУНКЦИИ (РАЗДАЧА ДЛЯ САЙТА) ОСТАЮТСЯ КАК БЫЛИ ---
+# --- РАЗДАЧА ДАННЫХ ДЛЯ САЙТА ---
 
 @app.get("/api/get_market_data")
 def get_market_data():
     fallback_banks = [
         {"name": "Альфа-Банк", "rate": 17.4, "badge": "Лучшее решение"},
         {"name": "СберБанк", "rate": 17.9, "badge": "+ 21 000 ₽ переплаты"},
-        {"name": "ВТБ", "url": "https://www.vtb.ru/personal/kredity/nalichnymi/", "rate": 15.9, "badge": "Обязательная страховка"},
-        {"name": "Т-Банк", "url": "https://www.tbank.ru/loans/cash-loan/", "rate": 14.9, "badge": "Скрытые комиссии"}
+        {"name": "ВТБ", "rate": 15.9, "badge": "Обязательная страховка"},
+        {"name": "Т-Банк", "rate": 14.9, "badge": "Скрытые комиссии"}
     ]
     try:
         conn = get_db_connection()
